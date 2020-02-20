@@ -1,5 +1,5 @@
-from _bgo import *
-from _karhunen import *
+from ._bgo import *
+from ._karhunen import *
 import GPy
 import GPyOpt
 from collections import namedtuple
@@ -34,7 +34,7 @@ class Env(SkillfulAgent):
 
         self._observation_space = Box(low, high, shape=(4,1))
 
-        with open('/Users/salarsk/developments/phd/nsf/rl_acq/code/apg/0.005.out', 'rb') as f:
+        with open('/Users/salarsk/developments/phd/nsf/rl_acq/code/apg/'+str(lengthscale)+'.out', 'rb') as f:
             read_in = pickle.load(f)
         self.bgo_list = []
         for i in range(len(read_in)):

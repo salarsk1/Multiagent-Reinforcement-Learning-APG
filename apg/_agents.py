@@ -4,95 +4,19 @@ from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn as nn
 import numpy as np
-from _utils import *
-from _environment import *
+from ._utils import *
+from ._environment import *
 import torch.nn.functional as F
 import random
-from _model import *
+from ._model import *
 from collections import deque
 import math
 import gym
+from torch.distributions import Categorical
 
 
-__all__ = ["DDPGAgent", "DQNAgent"]
+__all__ = ["DDPGAgent", "DQNAgent", "A2CAgent"]
 
-
-class DDPGAgent(object):
-    def __init__(self, input_size, hidden_layers, output_size, actor_learning_rate=1e-4, 
-                critic_learning_rate=1e-3, gamma=0.99, tau=1e-2, 
-                max_memory_size=30_000):
-        # Params
-        # self.num_states = env.observation_space.shape[0]
-        # self.num_actions = env.action_space.shape[0]
-        self.num_states = input_size
-        self.num_actions = output_size
-        self.gamma = gamma
-        self.tau = tau
-
-        # Networks
-        self.actor = Actor(self.num_states, hidden_layers, self.num_actions)
-        self.actor_target = Actor(self.num_states, hidden_layers, self.num_actions)
-        self.critic = Critic(self.num_states + self.num_actions, hidden_layers, self.num_actions)
-        self.critic_target = Critic(self.num_states + self.num_actions, hidden_layers, self.num_actions)
-
-        for target_param, param in zip(self.actor_target.parameters(), self.actor.parameters()):
-            target_param.data.copy_(param.data)
-
-        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(param.data)
-        
-        # Training
-        self.replay = ReplayBuffer(max_memory_size)
-        self.critic_criterion  = nn.MSELoss()
-        self.actor_optimizer  = optim.Adam(self.actor.parameters(), lr=actor_learning_rate)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_learning_rate)
-
-        self.state = None
-        self.action = None
-        self.reward = None
-        self.new_state = None
-
-        self.reward_history = []
-        self.average_reward = []
-    
-    def get_action(self, state):
-        state = Variable(torch.from_numpy(state).float().unsqueeze(0))
-        action = self.actor.forward(state)
-        action = action.detach().numpy()[0,0]
-        return action
-    
-    def update(self, batch_size):
-        states, actions, rewards, next_states, _ = self.replay.sample(batch_size)
-        states = torch.FloatTensor(states)
-        actions = torch.FloatTensor(actions)
-        rewards = torch.FloatTensor(rewards)
-        next_states = torch.FloatTensor(next_states)
-    
-        # Critic loss        
-        Qvals = self.critic.forward(states, actions)
-        next_actions = self.actor_target.forward(next_states)
-        next_Q = self.critic_target.forward(next_states, next_actions.detach())
-        Qprime = rewards + self.gamma * next_Q
-        critic_loss = self.critic_criterion(Qvals, Qprime)
-
-        # Actor loss
-        policy_loss = -self.critic.forward(states, self.actor.forward(states)).mean()
-        
-        # update networks
-        self.actor_optimizer.zero_grad()
-        policy_loss.backward()
-        self.actor_optimizer.step()
-
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward() 
-        self.critic_optimizer.step()
-
-        # update target networks 
-        for target_param, param in zip(self.actor_target.parameters(), self.actor.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
-       
-        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
 
 class DQNAgent(object):
     def __init__(self, input_size, hidden_layers, output_size, learning_rate = 0.001, 
@@ -101,7 +25,7 @@ class DQNAgent(object):
 
         self.input_size = input_size
         self.hidden_layers = hidden_layers
-        self.output_size = output_size
+        self.num_actions = output_size
         self.learning_rate = learning_rate
         self.gamma = gamma
         self.epsilon_decay = epsilon_decay
@@ -109,8 +33,8 @@ class DQNAgent(object):
         self.target_update_freq = target_update_freq
         self.max_memory_size = max_memory_size
         self.replay = ReplayBuffer(self.max_memory_size)
-        self.policy = DQN(self.input_size, self.hidden_layers, self.output_size)
-        self.target = DQN(self.input_size, self.hidden_layers, self.output_size)
+        self.policy = DQN(self.input_size, self.hidden_layers, self.num_actions)
+        self.target = DQN(self.input_size, self.hidden_layers, self.num_actions)
         self.target.load_state_dict(self.policy.state_dict())
         self.target.eval()
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr = learning_rate)
@@ -126,32 +50,31 @@ class DQNAgent(object):
     def get_epsilon(self, episode):
         # explore_rate = self.min_eps + (1.0 - self.min_eps) * \
         #         math.exp(-episode * self.epsilon_decay)
-        explore_rate = self.min_eps + self.epsilon_decay**episode
+        explore_rate = max(self.min_eps, self.epsilon_decay**episode)
         return explore_rate
-
 
     def get_action(self, state, episode):
         explore_rate = self.get_epsilon(episode)
+        self.policy.eval()
         p = random.random()
         if p < explore_rate:
             # ret = torch.tensor(np.random.randint(self.output_size))
             # ret = torch.tensor(np.random.uniform(size=(1,self.output_size)))
-            ret = torch.tensor(np.random.uniform(size=(1,self.output_size)))
+            ret = torch.tensor(np.random.uniform(size=(1,self.num_actions)))
 
             return ret.argmax(dim=1).squeeze(0), ret
         else:
             with torch.no_grad():
-                # ret = self.policy(state).argmax(dim = 1).squeeze(0)
-                ret = self.policy(state.reshape(1, -1))
-                return ret.argmax(dim = 1).squeeze(0), ret
+                ret = self.policy(state).reshape(1,-1)
+                return ret.argmax(dim=1).squeeze(0), ret
 
     def update(self, batch_size, episode):
 
+        self.policy.train()
+        self.target.eval()
         states, actions, rewards, next_states, dones = self.replay.sample(batch_size)
-
         current_qs = self.policy(torch.FloatTensor(states)).gather(dim=1, 
                                 index = torch.tensor(actions).unsqueeze(-1))
-
         next_q_values = self.target(torch.FloatTensor(next_states)).gather(dim=1, 
                                     index = torch.tensor(actions).unsqueeze(-1))
 
@@ -167,13 +90,13 @@ class DQNAgent(object):
         self.optimizer.step()
 
 
-class A2C(object):
-    def __init__(self, input_size, hidden_layers, output_size, actor_learning_rate=1e-4, 
-                critic_learning_rate=1e-3, gamma=0.99, tau=1e-2, 
-                max_memory_size=30_000):
+class A2CAgent(object):
+    def __init__(self, input_size, hidden_layers, output_size, learning_rate=1e-4, 
+                gamma=0.99):
         # Params
         # self.num_states = env.observation_space.shape[0]
         # self.num_actions = env.action_space.shape[0]
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_states = input_size
         self.num_actions = output_size
         self.gamma = gamma
@@ -181,14 +104,12 @@ class A2C(object):
         # Networks
         self.actor = Actor(self.num_states, hidden_layers, self.num_actions)
         
-        self.critic = Critic(self.num_states + self.num_actions, hidden_layers, self.num_actions)
-        
+        self.critic = Actor(self.num_states, hidden_layers, 1)
         
         # Training
-        self.replay = ReplayBuffer(max_memory_size)
         self.critic_criterion  = nn.MSELoss()
-        self.actor_optimizer  = optim.Adam(self.actor.parameters(), lr=actor_learning_rate)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_learning_rate)
+        self.a2c_optimizer  = optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()),
+                                         lr=learning_rate)
 
         self.state = None
         self.action = None
@@ -198,65 +119,155 @@ class A2C(object):
         self.reward_history = []
         self.average_reward = []
 
+    def get_action(self, state, episode = None):
+        # state = Variable(torch.from_numpy(state).float().unsqueeze(0))
+        # policy_dist = F.softmax(self.actor.forward(state), dim=1).detach().numpy()
+        # print(policy_dist)
+        # action = np.random.choice(self.num_actions, p = np.squeeze(policy_dist))
+        # return action, policy_dist
+        self.actor.eval()
+        p = random.random()
+        if p < 0.01:
+            ret = torch.tensor(np.random.uniform(size=(1,self.num_actions)))
+            return ret.argmax(dim=1).squeeze(0), ret
 
 
+        state = torch.FloatTensor(state).to(self.device)
+        with torch.no_grad():
+            logits = self.actor.forward(state)
+        dist = F.softmax(logits, dim=0)
+        # for i in range(len(dist)):
+        #     if dist[i] < 1.e-10:
+        #         dist[i] = 0.0
+        #     if dist[i] > 1.0-1.e-10:
+        #         dist[i] = dist[i] = 1.0
+        probs = Categorical(dist)
+        return probs.sample().cpu().detach().item(), dist
 
 
+    def compute_loss(self, trajectory):
+        states = torch.FloatTensor([sars[0] for sars in trajectory]).to(self.device)
+        actions = torch.Tensor([sars[1] for sars in trajectory]).view(-1, 1).to(self.device)
+        rewards = torch.FloatTensor([sars[2] for sars in trajectory]).to(self.device)
+        next_states = torch.FloatTensor([sars[3] for sars in trajectory]).to(self.device)
+        dones = torch.Tensor([sars[4] for sars in trajectory]).view(-1, 1).to(self.device)
 
+        # compute discounted rewards
+        discounted_rewards = [torch.sum(torch.FloatTensor([self.gamma**i for i in range(rewards[j:].size(0))])\
+             * rewards[j:]) for j in range(rewards.size(0))]
+        value_targets = rewards.view(-1, 1) + torch.FloatTensor(discounted_rewards).view(-1, 1).to(self.device)
 
+        logits = self.actor.forward(states)
+        values = self.critic.forward(states)
+        dists = F.softmax(logits, dim=1)
+        probs = Categorical(dists)
 
+        # compute value loss
+        value_loss = F.mse_loss(values, value_targets.detach())
+        
+        
+        # compute entropy bonus
+        entropy = []
+        for dist in dists:
+            entropy.append(-torch.sum(dist.mean() * torch.log(dist+1.e-7)))
+        entropy = torch.stack(entropy).sum()
+        
+        # compute policy loss
+        advantage = value_targets - values
+        policy_loss = -probs.log_prob(actions.view(actions.size(0))).view(-1, 1) * advantage.detach()
+        policy_loss = policy_loss.mean()
+        
+        total_loss = policy_loss + value_loss - 0.001 * entropy 
+        return total_loss
+        
+    def update(self, trajectory):
+        self.actor.train()
+        loss = self.compute_loss(trajectory)
 
-
+        self.a2c_optimizer.zero_grad()
+        loss.backward()
+        self.a2c_optimizer.step()
 
 if __name__ == "__main__":
     import gym
     import sys
     import matplotlib.pyplot as plt
-    env1 = Env(0.05, 2)
-    agent1 = DDPGAgent(env1)
+
+    env = gym.make("CartPole-v0")
+    obs_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.n
+    MAX_EPISODE = 1500
+    MAX_STEPS = 500
+
+    lr = 1e-4
+    gamma = 0.99
+
+    agent = A2CAgent(4, [256, 256, 128], 2, learning_rate = 1.e-4)
+
+    def run():
+        for episode in range(MAX_EPISODE):
+            state = env.reset()
+            trajectory = []
+            episode_reward = 0
+            for steps in range(MAX_STEPS):
+                action = agent.get_action(state)
+                next_state, reward, done, _ = env.step(action)
+                trajectory.append([state, action, reward, next_state, done])
+                episode_reward += reward
+
+                if done:
+                    break
+                state = next_state
+            if episode % 10 == 0:
+                print("Episode " + str(episode) + ": " + str(episode_reward))
+            agent.update(trajectory)
+
+    run()
+
+    quit()
 
 
-    # env = NormalizedEnv(gym.make("Pendulum-v0"))
-    # env = gym.make("Pendulum-v0")
-    # agent = DDPGAgent(env)
-    # noise = OUNoise(env.action_space)
-    # batch_size = 128
-    # rewards = []
-    # avg_rewards = []
+    env = NormalizedEnv(gym.make("Pendulum-v0"))
+    env = gym.make("Pendulum-v0")
+    agent = DDPGAgent(env)
+    noise = OUNoise(env.action_space)
+    batch_size = 128
+    rewards = []
+    avg_rewards = []
 
-    # for episode in range(100):
-    #     state = env.reset()
-    #     noise.reset()
-    #     episode_reward = 0
+    for episode in range(100):
+        state = env.reset()
+        noise.reset()
+        episode_reward = 0
         
-    #     for step in range(500):
-    #         action = agent.get_action(state)
-    #         action = noise.get_action(action, step)
-    #         new_state, reward, done, _ = env.step(action)
-    #         print(new_state)
-    #         quit()
-    #         agent.replay.push(state, action, reward, new_state, done)
+        for step in range(500):
+            action = agent.get_action(state)
+            action = noise.get_action(action, step)
+            new_state, reward, done, _ = env.step(action)
+            print(new_state)
+            quit()
+            agent.replay.push(state, action, reward, new_state, done)
             
-    #         if len(agent.replay) > batch_size:
-    #             agent.update(batch_size)        
+            if len(agent.replay) > batch_size:
+                agent.update(batch_size)        
             
-    #         state = new_state
-    #         episode_reward += reward
+            state = new_state
+            episode_reward += reward
 
-    #         if done:
-    #             print("episode: {}, reward: {}, average _reward: {} \n".format(episode, 
-    #                     np.round(episode_reward, decimals=2), np.mean(rewards[-10:])))
-    #             break
+            if done:
+                print("episode: {}, reward: {}, average _reward: {} \n".format(episode, 
+                        np.round(episode_reward, decimals=2), np.mean(rewards[-10:])))
+                break
 
-    #     rewards.append(episode_reward)
-    #     avg_rewards.append(np.mean(rewards[-10:]))
+        rewards.append(episode_reward)
+        avg_rewards.append(np.mean(rewards[-10:]))
 
-    # plt.plot(rewards)
-    # plt.plot(avg_rewards)
-    # plt.plot()
-    # plt.xlabel('Episode')
-    # plt.ylabel('Reward')
-    # plt.show()
+    plt.plot(rewards)
+    plt.plot(avg_rewards)
+    plt.plot()
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
+    plt.show()
 
 
 

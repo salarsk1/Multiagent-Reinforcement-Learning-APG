@@ -2,7 +2,7 @@ import numpy as np
 import GPy
 import scipy
 
-__all__ = ['KarhunenLoeveExpansion']
+__all__ = ["KarhunenLoeveExpansion"]
 
 class KarhunenLoeveExpansion(object):
     def __init__(self, kernel, Xq = None, nq = 100, alpha = 0.95):

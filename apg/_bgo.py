@@ -1,7 +1,6 @@
 ''' This code evaluates the conergence of the 
     Bayesian Global Optimization
 '''
-__all__ = ['SkillfulAgent']
 
 from mpi4py import MPI
 import pickle
@@ -9,7 +8,7 @@ import numpy as np
 import GPy
 import GPyOpt
 import sys
-from _karhunen import *
+from ._karhunen import *
 from collections import namedtuple
 from itertools import product
 import itertools
@@ -18,6 +17,7 @@ import os
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
+__all__ = ["SkillfulAgent"]
 
 class EmbarrassParallel(object):
     '''

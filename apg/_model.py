@@ -5,8 +5,8 @@ import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from _utils import *
-from _environment import *
+from ._utils import *
+from ._environment import *
 
 __all__ = ["Critic", "Actor", "DQN"]
 
@@ -34,6 +34,7 @@ class Critic(nn.Module):
 
         for layer in range(len(self.linear)-1):
             x = F.relu(self.linear[layer](x))
+            x = nn.Dropout(0.3)(x)
 
         x = self.linear[-1](x)
 
@@ -61,8 +62,9 @@ class Actor(nn.Module):
         """
         for layer in range(len(self.linear)-1):
             x = F.relu(self.linear[layer](x))
+            x = nn.Dropout(0.3)(x)
 
-        x = 3.0 * F.sigmoid(self.linear[-1](x))
+        x = self.linear[-1](x)
         return x
 
 class DQN(nn.Module):
@@ -91,6 +93,7 @@ class DQN(nn.Module):
         state = torch.FloatTensor(state)
         for layer in range(len(self.linear)-1):
             state = F.tanh(self.linear[layer](state))
+            state = F.dropout(state, 0.3)
 
         # return F.softmax(self.linear[-1](state), dim=1)
         return self.linear[-1](state)
